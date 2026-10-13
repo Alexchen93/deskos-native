@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 from collections.abc import Callable, Sequence
+from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
 
@@ -13,11 +14,24 @@ gi.require_version("Gtk", "4.0")
 from gi.repository import GLib, Gtk
 
 from deskos.core.models import FeedItem, FocusState, TelemetrySnapshot, WeatherSnapshot
+from deskos.plugins.api import PluginEvent
+from deskos.settings import DeskOSSettings
 
 from .device import DeviceModelView
 from .formatters import duration, freshness_label, human_bytes, percent, temperature
 
 WEEKDAYS = ("星期一", "星期二", "星期三", "星期四", "星期五", "星期六", "星期日")
+
+
+@dataclass(frozen=True, slots=True)
+class LibraryEntry:
+    id: str
+    name: str
+    description: str
+    version: str
+    status: str
+    removable: bool = True
+    installed: bool = False
 
 
 def _label(text: str = "", css: str | None = None, **kwargs: object) -> Gtk.Label:
@@ -99,6 +113,7 @@ class HomeScreen(Gtk.Box):
         super().__init__(orientation=Gtk.Orientation.VERTICAL, spacing=14)
         self.add_css_class("screen")
         self._on_navigate = on_navigate
+        self._use_24_hour = True
 
         header = Gtk.Box(spacing=16)
         header.add_css_class("home-header")
@@ -113,9 +128,11 @@ class HomeScreen(Gtk.Box):
         self.append(header)
 
         body = Gtk.Box(spacing=14, vexpand=True)
+        self._source_widgets: dict[str, Gtk.Widget] = {}
         weather_button = Gtk.Button(width_request=318, hexpand=False, vexpand=True)
         weather_button.add_css_class("briefing-weather")
         weather_button.connect("clicked", lambda _button: self._on_navigate("weather"))
+        self._source_widgets["weather"] = weather_button
         weather = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=8)
         weather.append(_label("現在天氣", "section-label", xalign=0))
         current = Gtk.Box(spacing=14, valign=Gtk.Align.CENTER, vexpand=True)
@@ -141,21 +158,23 @@ class HomeScreen(Gtk.Box):
         )
         briefing.add_css_class("briefing-list")
         briefing.append(_label("今日摘要", "section-label", xalign=0, margin_top=12))
-        self._focus_time, self._focus_detail = self._briefing_row(
+        self._focus_time, self._focus_detail, self._source_widgets["focus"] = self._briefing_row(
             briefing,
             "focus",
             "專注計時",
             "25:00",
             "已暫停 · 今天完成 0 次",
         )
-        self._system_value, self._system_detail = self._briefing_row(
-            briefing,
-            "device",
-            "裝置狀態",
-            "CPU —  ·  溫度 —",
-            "記憶體 —",
+        self._system_value, self._system_detail, self._source_widgets["device"] = (
+            self._briefing_row(
+                briefing,
+                "device",
+                "裝置狀態",
+                "CPU —  ·  溫度 —",
+                "記憶體 —",
+            )
         )
-        self._feed_title, self._feed_source = self._briefing_row(
+        self._feed_title, self._feed_source, self._source_widgets["feed"] = self._briefing_row(
             briefing,
             "feed",
             "最新科技快訊",
@@ -178,7 +197,7 @@ class HomeScreen(Gtk.Box):
         detail: str,
         *,
         wrap: bool = False,
-    ) -> tuple[Gtk.Label, Gtk.Label]:
+    ) -> tuple[Gtk.Label, Gtk.Label, Gtk.Button]:
         button = Gtk.Button(hexpand=True)
         button.add_css_class("briefing-row")
         button.connect("clicked", lambda _button: self._on_navigate(page))
@@ -193,7 +212,12 @@ class HomeScreen(Gtk.Box):
         row.append(_label("›", "briefing-arrow", valign=Gtk.Align.CENTER))
         button.set_child(row)
         parent.append(button)
-        return value_label, detail_label
+        return value_label, detail_label, button
+
+    def set_plugin_available(self, plugin_id: str, available: bool) -> None:
+        widget = self._source_widgets.get(plugin_id)
+        if widget is not None:
+            widget.set_visible(available)
 
     def _tick(self) -> bool:
         self.update_time(datetime.now())
@@ -204,7 +228,11 @@ class HomeScreen(Gtk.Box):
         greeting = "早安" if hour < 12 else "午安" if hour < 18 else "晚安"
         self._greeting.set_label(greeting)
         self._date.set_label(f"{moment:%Y 年 %m 月 %d 日}  {WEEKDAYS[moment.weekday()]}")
-        self._home_clock.set_label(moment.strftime("%H:%M"))
+        self._home_clock.set_label(moment.strftime("%H:%M" if self._use_24_hour else "%I:%M %p"))
+
+    def update_settings(self, settings: DeskOSSettings) -> None:
+        self._use_24_hour = settings.use_24_hour_time
+        self.update_time(datetime.now())
 
     def update_weather(self, snapshot: WeatherSnapshot) -> None:
         icon, condition = _weather_presentation(snapshot.weather_code)
@@ -241,8 +269,9 @@ class HomeScreen(Gtk.Box):
 
 
 class ClockScreen(Gtk.Box):
-    def __init__(self) -> None:
+    def __init__(self, *, use_24_hour: bool = True) -> None:
         super().__init__(orientation=Gtk.Orientation.VERTICAL, spacing=16)
+        self._use_24_hour = use_24_hour
         self.add_css_class("screen")
         header, self._status = _page_header("時鐘", "本機時間與日程進度", right_text="本機時間")
         self.append(header)
@@ -291,7 +320,7 @@ class ClockScreen(Gtk.Box):
         return True
 
     def update_time(self, moment: datetime) -> None:
-        self._time.set_label(moment.strftime("%H:%M"))
+        self._time.set_label(moment.strftime("%H:%M" if self._use_24_hour else "%I:%M %p"))
         self._seconds.set_label(moment.strftime(":%S"))
         self._date.set_label(moment.strftime("%Y 年 %m 月 %d 日"))
         seconds = moment.hour * 3600 + moment.minute * 60 + moment.second
@@ -301,6 +330,11 @@ class ClockScreen(Gtk.Box):
         self._week.set_label(f"第 {moment.isocalendar().week} 週")
         year_length = 366 if moment.replace(month=12, day=31).timetuple().tm_yday == 366 else 365
         self._year.set_label(f"{moment.timetuple().tm_yday / year_length:.0%}")
+
+    def on_plugin_event(self, event: PluginEvent) -> None:
+        if event.topic == "settings" and isinstance(event.payload, DeskOSSettings):
+            self._use_24_hour = event.payload.use_24_hour_time
+            self.update_time(datetime.now())
 
 
 class WeatherScreen(Gtk.Box):
@@ -355,6 +389,10 @@ class WeatherScreen(Gtk.Box):
         self._rain.set_label(percent(snapshot.precipitation_probability))
         self._observed.set_label(snapshot.observed_at.strftime("%H:%M"))
 
+    def on_plugin_event(self, event: PluginEvent) -> None:
+        if event.topic == "weather" and isinstance(event.payload, WeatherSnapshot):
+            self.update_weather(event.payload)
+
 
 class TechFeedScreen(Gtk.Box):
     def __init__(self) -> None:
@@ -398,6 +436,10 @@ class TechFeedScreen(Gtk.Box):
             row.append(copy)
             self._list.append(row)
 
+    def on_plugin_event(self, event: PluginEvent) -> None:
+        if event.topic == "feed" and isinstance(event.payload, Sequence):
+            self.update_feed(event.payload)
+
 
 class FocusScreen(Gtk.Box):
     def __init__(
@@ -405,8 +447,13 @@ class FocusScreen(Gtk.Box):
         on_start: Callable[[], None] | None = None,
         on_pause: Callable[[], None] | None = None,
         on_reset: Callable[[], None] | None = None,
+        *,
+        focus_minutes: int = 25,
+        rest_minutes: int = 5,
     ) -> None:
         super().__init__(orientation=Gtk.Orientation.VERTICAL, spacing=14)
+        self._focus_seconds = focus_minutes * 60
+        self._rest_seconds = rest_minutes * 60
         self.add_css_class("screen")
         header, self._state_badge = _page_header(
             "專注計時", "一次只處理現在最重要的事", right_text="已暫停"
@@ -440,7 +487,7 @@ class FocusScreen(Gtk.Box):
         summary.add_css_class("focus-summary")
         summary.append(_label("本次節奏", "section-label", xalign=0, margin_bottom=8))
         self._sessions = _data_row(summary, "今日完成", initial="0 次")
-        self._rhythm = _data_row(summary, "計時長度", initial="25 分鐘")
+        self._rhythm = _data_row(summary, "計時長度", initial=f"{focus_minutes} 分鐘")
         content.append(summary)
         self.append(content)
 
@@ -465,9 +512,16 @@ class FocusScreen(Gtk.Box):
         self._mode.set_label(f"{mode}模式 · {status}")
         self._remaining.set_label(duration(state.remaining_seconds))
         self._sessions.set_label(f"{state.completed_sessions} 次")
-        self._rhythm.set_label("25 分鐘" if state.mode == "focus" else "5 分鐘")
-        total = 25 * 60 if state.mode == "focus" else 5 * 60
+        total = self._focus_seconds if state.mode == "focus" else self._rest_seconds
+        self._rhythm.set_label(f"{total // 60} 分鐘")
         self._progress.set_fraction(min(1.0, max(0.0, state.remaining_seconds / total)))
+
+    def on_plugin_event(self, event: PluginEvent) -> None:
+        if event.topic == "focus" and isinstance(event.payload, FocusState):
+            self.update_focus(event.payload)
+        elif event.topic == "settings" and isinstance(event.payload, DeskOSSettings):
+            self._focus_seconds = event.payload.focus_minutes * 60
+            self._rest_seconds = event.payload.rest_minutes * 60
 
 
 class DeviceMonitorScreen(Gtk.Box):
@@ -529,6 +583,164 @@ class DeviceMonitorScreen(Gtk.Box):
     def set_render_active(self, visible: bool) -> None:
         self._model_view.set_render_enabled(visible)
 
+    def on_activate(self) -> None:
+        self.set_render_active(True)
+
+    def on_deactivate(self) -> None:
+        self.set_render_active(False)
+
+    def on_plugin_event(self, event: PluginEvent) -> None:
+        if event.topic == "telemetry" and isinstance(event.payload, TelemetrySnapshot):
+            self.update_telemetry(event.payload)
+
     def set_visible(self, visible: bool) -> None:
         """Retain the original render-toggle API used by the first window shell."""
         self.set_render_active(visible)
+
+
+class AppLibraryScreen(Gtk.Box):
+    """Local catalog for core pages, discovered plugins, and isolated failures."""
+
+    def __init__(
+        self,
+        entries: Callable[[], Sequence[LibraryEntry]],
+        on_change: Callable[[str, bool], None],
+    ) -> None:
+        super().__init__(orientation=Gtk.Orientation.VERTICAL, spacing=12)
+        self.add_css_class("screen")
+        self._entries = entries
+        self._on_change = on_change
+        header, self._summary = _page_header(
+            "應用程式", "加入或移除這台裝置上的小 App", right_text=""
+        )
+        self.append(header)
+        scroll = Gtk.ScrolledWindow(vexpand=True, hscrollbar_policy=Gtk.PolicyType.NEVER)
+        self._list = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=0)
+        self._list.add_css_class("library-list")
+        scroll.set_child(self._list)
+        self.append(scroll)
+        self.refresh()
+
+    def refresh(self) -> None:
+        while child := self._list.get_first_child():
+            self._list.remove(child)
+        entries = tuple(self._entries())
+        installed = sum(entry.installed or not entry.removable for entry in entries)
+        self._summary.set_label(f"{installed} 個已啟用")
+        for entry in entries:
+            row = Gtk.Box(spacing=14)
+            row.add_css_class("library-row")
+            copy = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=2, hexpand=True)
+            title = Gtk.Box(spacing=8)
+            title.append(_label(entry.name, "library-title", xalign=0))
+            title.append(_label(entry.status, "library-status", xalign=0))
+            copy.append(title)
+            copy.append(_label(entry.description, "meta-label", xalign=0, wrap=True))
+            copy.append(_label(f"v{entry.version}", "library-version", xalign=0))
+            row.append(copy)
+            if entry.removable:
+                installing = not entry.installed
+                button = Gtk.Button(label="加入" if installing else "移除")
+                button.add_css_class("library-action")
+                button.add_css_class("primary-action" if installing else "secondary-action")
+                button.connect(
+                    "clicked",
+                    lambda _button, plugin_id=entry.id, install=installing: self._toggle(
+                        plugin_id, install
+                    ),
+                )
+                row.append(button)
+            self._list.append(row)
+
+    def _toggle(self, plugin_id: str, install: bool) -> None:
+        self._on_change(plugin_id, install)
+        self.refresh()
+
+
+class SettingsScreen(Gtk.Box):
+    """Editable persisted product settings; only low-power 3D needs restart."""
+
+    def __init__(
+        self,
+        settings: DeskOSSettings,
+        on_save: Callable[[DeskOSSettings], None],
+    ) -> None:
+        super().__init__(orientation=Gtk.Orientation.VERTICAL, spacing=12)
+        self.add_css_class("screen")
+        self._on_save = on_save
+        header, self._status = _page_header("設定", "所有變更儲存在本機 SQLite", right_text="")
+        self.append(header)
+
+        scroll = Gtk.ScrolledWindow(vexpand=True, hscrollbar_policy=Gtk.PolicyType.NEVER)
+        form = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=10)
+        form.add_css_class("settings-form")
+
+        self._weather_name = self._text_row(form, "天氣顯示名稱", settings.weather_display_name)
+        coordinates = Gtk.Box(spacing=10)
+        coordinates.append(_label("天氣座標", "settings-label", xalign=0, width_chars=16))
+        self._latitude = Gtk.SpinButton.new_with_range(-90, 90, 0.0001)
+        self._latitude.set_digits(4)
+        self._latitude.set_value(settings.weather_latitude)
+        self._longitude = Gtk.SpinButton.new_with_range(-180, 180, 0.0001)
+        self._longitude.set_digits(4)
+        self._longitude.set_value(settings.weather_longitude)
+        coordinates.append(self._latitude)
+        coordinates.append(self._longitude)
+        form.append(coordinates)
+
+        self._rss_urls = self._text_row(form, "RSS URLs（逗號分隔）", ", ".join(settings.rss_urls))
+        self._focus_minutes = self._number_row(form, "專注分鐘", settings.focus_minutes, 1, 180)
+        self._rest_minutes = self._number_row(form, "休息分鐘", settings.rest_minutes, 1, 60)
+        self._use_24_hour = Gtk.CheckButton(label="使用 24 小時制")
+        self._use_24_hour.set_active(settings.use_24_hour_time)
+        self._use_24_hour.add_css_class("settings-toggle")
+        form.append(self._use_24_hour)
+        self._low_power = Gtk.CheckButton(label="低功耗 3D（重新啟動後套用）")
+        self._low_power.set_active(settings.low_power_3d)
+        self._low_power.add_css_class("settings-toggle")
+        form.append(self._low_power)
+
+        save = Gtk.Button(label="儲存設定", halign=Gtk.Align.START)
+        save.add_css_class("primary-action")
+        save.add_css_class("settings-save")
+        save.connect("clicked", self._save)
+        form.append(save)
+        scroll.set_child(form)
+        self.append(scroll)
+
+    def _text_row(self, parent: Gtk.Box, title: str, value: str) -> Gtk.Entry:
+        row = Gtk.Box(spacing=10)
+        row.append(_label(title, "settings-label", xalign=0, width_chars=16))
+        entry = Gtk.Entry(text=value, hexpand=True)
+        row.append(entry)
+        parent.append(row)
+        return entry
+
+    def _number_row(
+        self, parent: Gtk.Box, title: str, value: int, minimum: int, maximum: int
+    ) -> Gtk.SpinButton:
+        row = Gtk.Box(spacing=10)
+        row.append(_label(title, "settings-label", xalign=0, width_chars=16))
+        spin = Gtk.SpinButton.new_with_range(minimum, maximum, 1)
+        spin.set_value(value)
+        row.append(spin)
+        parent.append(row)
+        return spin
+
+    def _save(self, _button: Gtk.Button) -> None:
+        try:
+            value = DeskOSSettings(
+                weather_display_name=self._weather_name.get_text(),
+                weather_latitude=self._latitude.get_value(),
+                weather_longitude=self._longitude.get_value(),
+                rss_urls=tuple(self._rss_urls.get_text().split(",")),
+                focus_minutes=self._focus_minutes.get_value_as_int(),
+                rest_minutes=self._rest_minutes.get_value_as_int(),
+                use_24_hour_time=self._use_24_hour.get_active(),
+                low_power_3d=self._low_power.get_active(),
+            ).validated()
+            self._on_save(value)
+        except ValueError as error:
+            self._status.set_label(str(error))
+            return
+        self._status.set_label("已儲存")

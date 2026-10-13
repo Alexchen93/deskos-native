@@ -311,6 +311,48 @@ button.danger-action {
   font-feature-settings: "tnum";
 }
 .fallback { color: #8d99a4; font-size: 13px; }
+
+/* App Library: one compact catalog row per local app */
+.library-list {
+  background-color: #131a21;
+  border: 1px solid #29323b;
+  border-radius: 4px;
+}
+.library-row {
+  min-height: 74px;
+  padding: 10px 14px;
+  border-bottom: 1px solid #29323b;
+}
+.library-title { color: #f1f3f5; font-size: 15px; font-weight: 800; }
+.library-status { color: #c58a60; font-size: 11px; font-weight: 700; }
+.library-version { color: #73808b; font-size: 11px; }
+button.library-action {
+  min-width: 104px;
+  min-height: 48px;
+  border-radius: 4px;
+  font-size: 13px;
+  font-weight: 800;
+}
+
+/* Settings: aligned controls with touch-size rows */
+.settings-form { padding: 4px 2px 16px 2px; }
+.settings-form > box { min-height: 48px; }
+.settings-label { color: #b5bec7; font-size: 13px; font-weight: 700; }
+.settings-form entry,
+.settings-form spinbutton {
+  min-height: 42px;
+  border-radius: 4px;
+  background-color: #18212a;
+  color: #eef1f4;
+}
+.settings-toggle { min-height: 48px; color: #d4d9de; }
+button.settings-save {
+  min-width: 132px;
+  min-height: 48px;
+  margin-top: 4px;
+  border-radius: 4px;
+  font-weight: 800;
+}
 """
 
 

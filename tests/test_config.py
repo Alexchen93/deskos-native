@@ -2,14 +2,16 @@ from deskos.app import _source_name
 from deskos.config import AppConfig
 
 
-def test_config_reads_native_runtime_flags(monkeypatch) -> None:
+def test_config_reads_the_native_window_mode_flag(monkeypatch) -> None:
     monkeypatch.setenv("DESKOS_WINDOWED", "1")
-    monkeypatch.setenv("DESKOS_LOW_POWER", "1")
-    monkeypatch.setenv("DESKOS_FEED_URLS", "https://example.com/feed, https://other.test/rss")
-    config = AppConfig.from_environment()
-    assert config.windowed is True
-    assert config.low_power is True
-    assert config.feed_urls == ("https://example.com/feed", "https://other.test/rss")
+
+    assert AppConfig.from_environment().windowed is True
+
+
+def test_config_defaults_to_fullscreen_native_mode(monkeypatch) -> None:
+    monkeypatch.delenv("DESKOS_WINDOWED", raising=False)
+
+    assert AppConfig.from_environment().windowed is False
 
 
 def test_feed_source_name_uses_hostname() -> None:

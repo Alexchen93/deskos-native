@@ -7,7 +7,7 @@ WINDOW_PATH = ROOT / "src/deskos/ui/window.py"
 SCREENS_PATH = ROOT / "src/deskos/ui/screens.py"
 STYLE_PATH = ROOT / "src/deskos/ui/style.py"
 
-NAV_DESTINATIONS = ("home", "clock", "weather", "feed", "focus", "device")
+CORE_NAV_DESTINATIONS = ("home", "library", "settings")
 SCREEN_COMPOSITIONS = {
     "HomeScreen": {"briefing-weather", "briefing-list", "briefing-row"},
     "ClockScreen": {"clock-stage", "clock-facts"},
@@ -139,60 +139,72 @@ def test_window_defaults_target_the_pi_display() -> None:
     assert keywords["default_height"] == "self.DISPLAY_HEIGHT"
 
 
-def test_compact_rail_exposes_all_six_stack_destinations_without_decorative_icons() -> None:
+def test_dynamic_shell_keeps_core_pages_and_scrollable_touch_navigation() -> None:
     window = _class(_tree(WINDOW_PATH), "DeskOSWindow")
-    nav_items = _class_literal(window, "_NAV_ITEMS")
-
-    assert tuple(item[0] for item in nav_items) == NAV_DESTINATIONS
-    assert all(len(item) == 2 for item in nav_items)
-    assert tuple(item[1] for item in nav_items) == ("首頁", "時鐘", "天氣", "快訊", "專注", "裝置")
-
+    assignment = next(
+        node
+        for node in window.body
+        if isinstance(node, ast.Assign)
+        and any(
+            isinstance(target, ast.Name) and target.id == "_CORE_NAV_ITEMS"
+            for target in node.targets
+        )
+    )
+    assert isinstance(assignment.value, ast.Tuple)
+    core_items = assignment.value.elts
     init = _method(window, "__init__")
-    root_children = {
-        _qualified_name(argument.func)
-        if isinstance(argument, ast.Call)
-        else _qualified_name(argument)
-        for call in ast.walk(init)
-        if isinstance(call, ast.Call) and _qualified_name(call.func) == "root.append"
-        for argument in call.args
+    sidebar = _method(window, "_make_sidebar")
+
+    assert tuple(_qualified_name(item.elts[0]) for item in core_items) == (
+        "HOME",
+        "LIBRARY",
+        "SETTINGS",
+    )
+    assert tuple(ast.literal_eval(item.elts[1]) for item in core_items) == (
+        "首頁",
+        "應用程式",
+        "設定",
+    )
+    assert any(name == "Gtk.ScrolledWindow" for name, _arguments in _calls(sidebar))
+    assert ("self._add_navigation", ("page", "label")) in _calls(sidebar)
+    assert {"self.HOME", "self.LIBRARY", "self.SETTINGS"} <= {
+        _qualified_name(node) for node in ast.walk(init) if isinstance(node, ast.Attribute)
     }
-    assert {"self._make_sidebar", "self._stack"} <= root_children
-
-    stack_destinations = set()
-    for loop in (node for node in ast.walk(init) if isinstance(node, ast.For)):
-        if not any(
-            isinstance(node, ast.Call) and _qualified_name(node.func) == "self._stack.add_named"
-            for node in ast.walk(loop)
-        ):
-            continue
-        assert isinstance(loop.iter, ast.Tuple)
-        for pair in loop.iter.elts:
-            assert isinstance(pair, ast.Tuple)
-            destination = pair.elts[0]
-            if isinstance(destination, ast.Constant):
-                stack_destinations.add(destination.value)
-            else:
-                assert _qualified_name(destination) == "self.HOME"
-                stack_destinations.add("home")
-    assert stack_destinations == set(NAV_DESTINATIONS)
 
 
-def test_window_updates_forward_to_detail_screen_and_home() -> None:
+def test_dynamic_plugin_mount_remove_and_event_delivery_are_guarded_by_installation() -> None:
     window = _class(_tree(WINDOW_PATH), "DeskOSWindow")
-    forwarding = {
-        "update_telemetry": "device",
-        "update_weather": "weather",
-        "update_feed": "feed",
-        "update_focus": "focus",
-    }
 
-    for method_name, detail_screen in forwarding.items():
-        calls = _calls(_method(window, method_name))
-        argument = "items" if method_name == "update_feed" else "snapshot"
-        if method_name == "update_focus":
-            argument = "state"
-        assert (f"self.{detail_screen}.{method_name}", (argument,)) in calls
-        assert (f"self.home.{method_name}", (argument,)) in calls
+    mount_calls = _calls(_method(window, "_mount_plugin"))
+    assert ("self._stack.add_named", ("screen", "plugin_id")) in mount_calls
+    assert ("self._add_navigation", ("plugin_id", "spec.metadata.name")) in mount_calls
+
+    unmount_calls = _calls(_method(window, "_unmount_plugin"))
+    assert ("self._stack.remove", ("screen",)) in unmount_calls
+    assert ("self._remove_navigation", ("plugin_id",)) in unmount_calls
+
+    dispatch = _method(window, "dispatch_event")
+    assert "self._plugins.is_installed" in {
+        _qualified_name(call.func) for call in ast.walk(dispatch) if isinstance(call, ast.Call)
+    }
+    assert ("self._deliver_home", ("event",)) in _calls(dispatch)
+
+
+def test_home_availability_tracks_optional_plugin_installation() -> None:
+    window = _class(_tree(WINDOW_PATH), "DeskOSWindow")
+    sync = _method(window, "_sync_home_availability")
+
+    assert {"weather", "feed", "focus", "device"} <= _string_literals(sync)
+    assert (
+        "self.home.set_plugin_available",
+        ("plugin_id", "self._plugins.is_installed"),
+    ) not in _calls(sync)
+    assert "self.home.set_plugin_available" in {
+        _qualified_name(call.func) for call in ast.walk(sync) if isinstance(call, ast.Call)
+    }
+    assert "self._plugins.is_installed" in {
+        _qualified_name(call.func) for call in ast.walk(sync) if isinstance(call, ast.Call)
+    }
 
 
 def test_touch_controls_and_compact_rail_fit_the_embedded_target() -> None:

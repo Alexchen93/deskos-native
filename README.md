@@ -2,11 +2,14 @@
 
 DeskOS Native 是為 **Raspberry Pi 直接連接觸控螢幕**設計的本機資訊與監控介面。它以 Python、GTK 4 與 PyGObject 實作，不需要瀏覽器、不啟動 HTTP Server，也不會開放網路監聽埠。
 
-目前介面針對 **1024 × 600** 顯示器設計，採用精簡文字導覽、清楚的資料列與單一暖色點綴，避免把每個資訊都做成相同的儀表板卡片。
+目前介面針對 **1024 × 600** 顯示器設計，採用精簡文字導覽、清楚的資料列與單一暖色點綴。從 v0.4 起，核心只保留首頁、應用程式管理與設定；時鐘、天氣、快訊、專注及裝置監測都以可加入／移除的小 App 運作。
 
 ## 特色
 
-- **每日首頁**：時間、日期、即時天氣、專注進度、系統狀態與最新科技快訊。
+- **小 App 平台**：內建 App 與第三方外掛使用相同的登錄、生命週期與事件介面。
+- **應用程式管理**：直接從觸控介面加入或移除已探索的小 App，不需重新啟動。
+- **原生設定**：在螢幕上調整天氣地點、RSS、專注／休息時間、時制與低功耗 3D。
+- **每日首頁**：時間、日期、即時天氣、專注進度、系統狀態與最新科技快訊；來源 App 移除後摘要會自動隱藏。
 - **本機時鐘**：大字時間、日期、年度週次與當日／年度進度。
 - **天氣資訊**：透過 Open-Meteo 取得溫度、體感溫度、降雨機率與天氣狀態；網路中斷時保留最後一次成功資料。
 - **科技快訊**：讀取 RSS／Atom feed，以適合觸控閱讀的清單呈現。
@@ -15,6 +18,19 @@ DeskOS Native 是為 **Raspberry Pi 直接連接觸控螢幕**設計的本機資
 - **Raspberry Pi 4 模型**：使用原生 `Gtk.GLArea` 顯示 3D 模型；不支援 OpenGL 時自動切換靜態預覽。
 - **觸控優先**：主要操作區保留至少 48 px 的觸控高度。
 - **本機優先**：無 WebView、無內建網站、無遠端管理介面；使用者資料保存在 Pi 本機。
+
+## 小 App 與外掛
+
+DeskOS 內建的時鐘、天氣、科技快訊、專注與裝置監測，都可以在「應用程式」頁加入或移除。移除只會停用並從導覽列卸載，不會刪除該 App 的 SQLite 設定；重新加入即可恢復。
+
+第三方外掛是已安裝到同一 Python 環境、並宣告 `deskos.plugins` entry point 的 Python 套件。例如外掛套件完成可信來源審查後，可安裝至 DeskOS virtual environment：
+
+```bash
+cd /opt/deskos-native
+.venv/bin/pip install /path/to/trusted-plugin
+```
+
+重新啟動 DeskOS 後，外掛會出現在「應用程式」頁，再由使用者決定是否加入。DeskOS 不會自行下載套件、執行 `pip` 或執行 shell 指令。完整 API、生命週期與安全界線請參考 [`docs/PLUGIN_SYSTEM.md`](docs/PLUGIN_SYSTEM.md)。
 
 ## 系統需求
 
@@ -93,44 +109,22 @@ mkdir -p ~/.config/autostart
 cp /opt/deskos-native/deploy/deskos.desktop ~/.config/autostart/deskos.desktop
 ```
 
-## 地點與資料來源設定
+## 設定
 
-DeskOS 透過環境變數設定地點與 RSS，不需修改程式碼：
+從側邊導覽進入「設定」，可直接調整：
+
+- 天氣顯示名稱、緯度與經度
+- 一個或多個 RSS／Atom URL
+- 專注與休息分鐘數
+- 12／24 小時制
+- 低功耗 3D 模式（重新啟動後套用）
+
+設定儲存在 `~/.local/share/deskos` 的 SQLite 資料庫。開發或診斷時仍可使用：
 
 | 變數 | 預設值 | 說明 |
 | --- | --- | --- |
-| `DESKOS_WEATHER_LOCATION` | `Taipei` | 介面顯示的地點名稱 |
-| `DESKOS_WEATHER_LAT` | `25.0330` | 緯度 |
-| `DESKOS_WEATHER_LON` | `121.5654` | 經度 |
-| `DESKOS_FEED_URLS` | Raspberry Pi News | 以逗號分隔的 RSS／Atom URL |
-| `DESKOS_LOW_POWER` | `0` | 設為 `1` 時降低 3D 更新頻率 |
 | `DESKOS_WINDOWED` | `0` | 設為 `1` 時以 1024 × 600 視窗開啟 |
 | `DESKOS_DATA_DIR` | `~/.local/share/deskos` | SQLite 與快取資料目錄 |
-
-例如：
-
-```bash
-export DESKOS_WEATHER_LOCATION='Kaohsiung'
-export DESKOS_WEATHER_LAT='22.6273'
-export DESKOS_WEATHER_LON='120.3014'
-export DESKOS_FEED_URLS='https://www.raspberrypi.com/news/feed/'
-/opt/deskos-native/.venv/bin/deskos
-```
-
-若要讓自動啟動固定使用這些設定，可建立啟動腳本：
-
-```bash
-cat > /opt/deskos-native/run-deskos.sh <<'SH'
-#!/bin/sh
-export DESKOS_WEATHER_LOCATION='Kaohsiung'
-export DESKOS_WEATHER_LAT='22.6273'
-export DESKOS_WEATHER_LON='120.3014'
-exec /opt/deskos-native/.venv/bin/deskos
-SH
-chmod +x /opt/deskos-native/run-deskos.sh
-```
-
-接著把 autostart 指令改成 `/opt/deskos-native/run-deskos.sh`。
 
 ## 更新
 
@@ -181,18 +175,19 @@ cd /opt/deskos-native
 .venv/bin/pytest
 ```
 
-目前測試涵蓋設定、SQLite、天氣與 RSS 快取、專注計時、系統監測格式、3D 模型解析及 1024 × 600 UI 合約。
+目前 52 項測試涵蓋設定、SQLite、天氣與 RSS 快取、專注計時、系統監測格式、3D 模型解析、外掛登錄／探索／持久化及 1024 × 600 UI 合約。
 
 ## 架構
 
-- `src/deskos/ui/`：GTK 畫面、導覽、CSS 與 3D 模型檢視器
+- `src/deskos/plugins/`：不可變外掛 API、登錄、entry point 探索與啟用狀態
+- `src/deskos/ui/`：GTK 核心頁面、動態導覽、CSS 與 3D 模型檢視器
 - `src/deskos/services/`：天氣、RSS、專注、SQLite 與系統監測
 - `src/deskos/core/`：不可變資料模型與服務介面
 - `assets/models/`：Raspberry Pi 4 GLB 與靜態備援圖片
 - `deploy/`：圖形桌面安裝與自動啟動範例
 - `tests/`：服務與 UI 合約測試
 
-更完整的設計界線請參考 [`ARCHITECTURE.md`](ARCHITECTURE.md)。
+更完整的設計界線請參考 [`ARCHITECTURE.md`](ARCHITECTURE.md)；外掛開發請參考 [`docs/PLUGIN_SYSTEM.md`](docs/PLUGIN_SYSTEM.md)。
 
 ## 安全界線
 

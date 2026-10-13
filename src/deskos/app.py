@@ -12,7 +12,9 @@ from gi.repository import Gio, GLib, Gtk
 
 from deskos.config import AppConfig
 from deskos.core.models import FeedItem, TelemetrySnapshot, WeatherSnapshot
-from deskos.paths import DATABASE_PATH, ensure_data_dir
+from deskos.paths import DATABASE_PATH, MODEL_PATH, MODEL_PREVIEW_PATH, ensure_data_dir
+from deskos.plugins import PluginEvent, PluginManager, PluginRegistry
+from deskos.plugins.builtin import builtin_plugin_specs
 from deskos.services import (
     FeedSource,
     FocusTimer,
@@ -21,11 +23,12 @@ from deskos.services import (
     RssAtomFeedService,
     SQLiteRepository,
 )
+from deskos.settings import DeskOSSettings, SettingsRepository
 from deskos.ui.window import DeskOSWindow
 
 
 class DeskOSApplication(Gtk.Application):
-    """Own the native window and all local service lifecycles."""
+    """Own the native shell, plugin catalog, and nonblocking local services."""
 
     WEATHER_REFRESH_SECONDS = 30 * 60
     FEED_REFRESH_SECONDS = 30 * 60
@@ -38,37 +41,66 @@ class DeskOSApplication(Gtk.Application):
         self.config = config or AppConfig.from_environment()
         ensure_data_dir()
         self.repository = SQLiteRepository(DATABASE_PATH)
+        self.settings_repository = SettingsRepository(self.repository)
+        self.settings = self.settings_repository.load()
         self.telemetry = PsutilTelemetryCollector()
-        self.focus = FocusTimer(self.repository)
-        self.weather = OpenMeteoWeatherService(
+        self.focus = FocusTimer(self.repository, duration_seconds=self.settings.focus_minutes * 60)
+        self.weather: OpenMeteoWeatherService
+        self.feeds: RssAtomFeedService
+        self._service_revision = 0
+        self._configure_network_services(self.settings)
+
+        self.registry = PluginRegistry()
+        for spec in builtin_plugin_specs(
+            model_path=MODEL_PATH,
+            preview_path=MODEL_PREVIEW_PATH,
+            low_power=self.settings.low_power_3d,
+            use_24_hour_time=self.settings.use_24_hour_time,
+            focus_minutes=self.settings.focus_minutes,
+            rest_minutes=self.settings.rest_minutes,
+            on_focus_start=self._focus_start,
+            on_focus_pause=self._focus_pause,
+            on_focus_reset=self._focus_reset,
+        ):
+            self.registry.register(spec)
+        built_in_ids = tuple(spec.metadata.id for spec in self.registry.all())
+        self.registry.discover()
+        self.plugins = PluginManager(
+            self.registry,
             self.repository,
-            latitude=self.config.weather_latitude,
-            longitude=self.config.weather_longitude,
-            location=self.config.weather_location,
+            default_installed_ids=built_in_ids,
         )
-        sources = tuple(FeedSource(_source_name(url), url) for url in self.config.feed_urls)
-        self.feeds = RssAtomFeedService(sources, self.repository)
+
         self.window: DeskOSWindow | None = None
         self._unsubscribe_telemetry: Callable[[], None] | None = None
         self._timeout_ids: list[int] = []
         self.connect("activate", self._on_activate)
         self.connect("shutdown", self._on_shutdown)
 
+    def _configure_network_services(self, settings: DeskOSSettings) -> None:
+        self._service_revision += 1
+        self.weather = OpenMeteoWeatherService(
+            self.repository,
+            latitude=settings.weather_latitude,
+            longitude=settings.weather_longitude,
+            location=settings.weather_display_name,
+        )
+        sources = tuple(FeedSource(_source_name(url), url) for url in settings.rss_urls)
+        self.feeds = RssAtomFeedService(sources, self.repository)
+
     def _on_activate(self, _application: Gtk.Application) -> None:
         if self.window is None:
             self.window = DeskOSWindow(
                 self,
-                low_power=self.config.low_power,
-                on_focus_start=self._focus_start,
-                on_focus_pause=self._focus_pause,
-                on_focus_reset=self._focus_reset,
+                registry=self.registry,
+                plugins=self.plugins,
+                repository=self.repository,
+                settings=self.settings,
+                on_settings_save=self._save_settings,
             )
             if self.config.windowed:
-                self.window.set_default_size(800, 480)
+                self.window.set_default_size(1024, 600)
             else:
-                # Labwc keeps a non-resizable GTK window at its requested size
-                # even after a fullscreen request. Allow resizing and repeat the
-                # request after mapping so the Pi's full 1024×600 output is used.
                 self.window.set_resizable(True)
                 self.window.set_decorated(False)
                 self.window.fullscreen()
@@ -87,13 +119,14 @@ class DeskOSApplication(Gtk.Application):
 
     def _start_services(self) -> None:
         assert self.window is not None
-        self.window.update_focus(self.focus.state())
+        self._dispatch("settings", self.settings)
+        self._dispatch("focus", self.focus.state())
         cached_weather = self.weather.latest()
         if cached_weather is not None:
-            self.window.update_weather(cached_weather)
+            self._dispatch("weather", cached_weather)
         cached_feed = self.feeds.latest()
         if cached_feed:
-            self.window.update_feed(cached_feed)
+            self._dispatch("feed", tuple(cached_feed))
 
         self._unsubscribe_telemetry = self.telemetry.subscribe(self._telemetry_from_worker)
         self.telemetry.start()
@@ -107,54 +140,81 @@ class DeskOSApplication(Gtk.Application):
             )
         )
 
+    def _dispatch(self, topic: str, payload: object) -> None:
+        if self.window is not None:
+            self.window.dispatch_event(PluginEvent(topic, payload))
+
     def _telemetry_from_worker(self, snapshot: TelemetrySnapshot) -> None:
         GLib.idle_add(self._apply_telemetry, snapshot)
 
     def _apply_telemetry(self, snapshot: TelemetrySnapshot) -> bool:
-        if self.window is not None:
-            self.window.update_telemetry(snapshot)
+        self._dispatch("telemetry", snapshot)
         return False
 
     def _refresh_weather(self) -> bool:
-        self.weather.refresh_async(self._weather_from_worker)
+        revision = self._service_revision
+        self.weather.refresh_async(lambda snapshot: self._weather_from_worker(snapshot, revision))
         return True
 
-    def _weather_from_worker(self, snapshot: WeatherSnapshot) -> None:
-        GLib.idle_add(self._apply_weather, snapshot)
+    def _weather_from_worker(self, snapshot: WeatherSnapshot, revision: int) -> None:
+        GLib.idle_add(self._apply_weather, snapshot, revision)
 
-    def _apply_weather(self, snapshot: WeatherSnapshot) -> bool:
-        if self.window is not None:
-            self.window.update_weather(snapshot)
+    def _apply_weather(self, snapshot: WeatherSnapshot, revision: int) -> bool:
+        if revision == self._service_revision:
+            self._dispatch("weather", snapshot)
         return False
 
     def _refresh_feed(self) -> bool:
-        self.feeds.refresh_async(self._feed_from_worker)
+        revision = self._service_revision
+        self.feeds.refresh_async(lambda items: self._feed_from_worker(tuple(items), revision))
         return True
 
-    def _feed_from_worker(self, items: Sequence[FeedItem]) -> None:
-        GLib.idle_add(self._apply_feed, tuple(items))
+    def _feed_from_worker(self, items: Sequence[FeedItem], revision: int) -> None:
+        GLib.idle_add(self._apply_feed, tuple(items), revision)
 
-    def _apply_feed(self, items: Sequence[FeedItem]) -> bool:
-        if self.window is not None:
-            self.window.update_feed(items)
+    def _apply_feed(self, items: Sequence[FeedItem], revision: int) -> bool:
+        if revision == self._service_revision:
+            self._dispatch("feed", tuple(items))
         return False
 
     def _tick_focus(self) -> bool:
-        if self.window is not None:
-            self.window.update_focus(self.focus.state())
+        self._dispatch("focus", self.focus.state())
         return True
 
     def _focus_start(self) -> None:
-        if self.window is not None:
-            self.window.update_focus(self.focus.start())
+        self._dispatch("focus", self.focus.start())
 
     def _focus_pause(self) -> None:
-        if self.window is not None:
-            self.window.update_focus(self.focus.pause())
+        self._dispatch("focus", self.focus.pause())
 
     def _focus_reset(self) -> None:
+        self._dispatch("focus", self.focus.reset())
+
+    def _save_settings(self, settings: DeskOSSettings) -> None:
+        previous = self.settings
+        self.settings = self.settings_repository.save(settings)
+        settings = self.settings
+        network_changed = (
+            previous.weather_display_name != settings.weather_display_name
+            or previous.weather_latitude != settings.weather_latitude
+            or previous.weather_longitude != settings.weather_longitude
+            or previous.rss_urls != settings.rss_urls
+        )
+        focus_changed = (
+            previous.focus_minutes != settings.focus_minutes
+            or previous.rest_minutes != settings.rest_minutes
+        )
+        if network_changed:
+            self._configure_network_services(settings)
+            self._refresh_weather()
+            self._refresh_feed()
+        if focus_changed:
+            state = self.focus.state()
+            duration = settings.focus_minutes if state.mode == "focus" else settings.rest_minutes
+            self.focus.set_mode(state.mode, duration_seconds=duration * 60)
         if self.window is not None:
-            self.window.update_focus(self.focus.reset())
+            self.window.update_settings(settings)
+        self._tick_focus()
 
     def _on_shutdown(self, _application: Gtk.Application) -> None:
         if self._unsubscribe_telemetry is not None:

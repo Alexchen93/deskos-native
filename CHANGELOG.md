@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.4.0 — 2026-10-13
+
+- Rebuilt DeskOS around a native mini-app plugin platform.
+- Added a frozen plugin API, validated registry, isolated Python entry-point discovery, and persistent enablement in SQLite.
+- Converted Clock, Weather, Tech Feed, Focus, and Device Monitor into built-in plugins using the same API as third-party apps.
+- Added a live App Library for adding and removing discovered apps without restarting DeskOS.
+- Added a native Settings screen for weather, RSS, focus rhythm, clock format, and low-power 3D preferences.
+- Added scrollable dynamic navigation and Home summaries that adapt when source apps are removed.
+- Added plugin lifecycle, settings namespacing, retained event delivery, discovery-error reporting, and security documentation.
+- Expanded the test suite to 52 tests and verified the add/remove/reinstall flow with GTK 4 on Raspberry Pi hardware.
+
 ## 0.2.0 — 2026-10-13
 
 - Rebuilt the shell for the Raspberry Pi's actual 1024×600 output and fixed Labwc fullscreen sizing.
