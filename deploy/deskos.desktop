@@ -1,0 +1,9 @@
+[Desktop Entry]
+Type=Application
+Name=DeskOS
+Comment=Native Raspberry Pi information and monitoring console
+Exec=/opt/deskos-native/.venv/bin/deskos
+Path=/opt/deskos-native
+Terminal=false
+StartupNotify=false
+X-GNOME-Autostart-enabled=true
