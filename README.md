@@ -187,7 +187,7 @@ cd /opt/deskos-native
 - `deploy/`：圖形桌面安裝與自動啟動範例
 - `tests/`：服務與 UI 合約測試
 
-更完整的設計界線請參考 [`ARCHITECTURE.md`](ARCHITECTURE.md)；外掛開發請參考 [`docs/PLUGIN_SYSTEM.md`](docs/PLUGIN_SYSTEM.md)。
+更完整的設計界線請參考 [`ARCHITECTURE.md`](ARCHITECTURE.md)；外掛開發請參考 [`docs/PLUGIN_SYSTEM.md`](docs/PLUGIN_SYSTEM.md)；後續 Weather Forecast、Calendar、Focus Insights、System History、Diagnostics 與硬體 App 規劃收錄於 [`docs/ROADMAP.md`](docs/ROADMAP.md)。
 
 ## 安全界線
 
