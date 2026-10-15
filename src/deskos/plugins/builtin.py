@@ -10,6 +10,13 @@ from deskos.ui.screens import (
     TechFeedScreen,
     WeatherScreen,
 )
+from deskos.ui.widgets import (
+    ClockHomeWidget,
+    DeviceHomeWidget,
+    FocusHomeWidget,
+    TechFeedHomeWidget,
+    WeatherHomeWidget,
+)
 
 from .api import PluginMetadata, PluginSpec
 
@@ -30,19 +37,22 @@ def builtin_plugin_specs(
 
     return (
         PluginSpec(
-            PluginMetadata("clock", "時鐘", "本機時間與日程進度", "0.4.0", 10),
+            PluginMetadata("clock", "時鐘", "本機時間與日程進度", "0.5.0", 10),
             lambda _context: ClockScreen(use_24_hour=use_24_hour_time),
+            create_widget=lambda _context: ClockHomeWidget(use_24_hour=use_24_hour_time),
         ),
         PluginSpec(
-            PluginMetadata("weather", "天氣", "目前天氣觀測", "0.4.0", 20),
+            PluginMetadata("weather", "天氣", "目前天氣觀測", "0.5.0", 20),
             lambda _context: WeatherScreen(),
+            create_widget=lambda _context: WeatherHomeWidget(),
         ),
         PluginSpec(
-            PluginMetadata("feed", "科技快訊", "RSS 與 Atom 科技動態", "0.4.0", 30),
+            PluginMetadata("feed", "科技快訊", "RSS 與 Atom 科技動態", "0.5.0", 30),
             lambda _context: TechFeedScreen(),
+            create_widget=lambda _context: TechFeedHomeWidget(),
         ),
         PluginSpec(
-            PluginMetadata("focus", "專注", "本機專注與休息計時", "0.4.0", 40),
+            PluginMetadata("focus", "專注", "本機專注與休息計時", "0.5.0", 40),
             lambda _context: FocusScreen(
                 on_focus_start,
                 on_focus_pause,
@@ -50,9 +60,14 @@ def builtin_plugin_specs(
                 focus_minutes=focus_minutes,
                 rest_minutes=rest_minutes,
             ),
+            create_widget=lambda _context: FocusHomeWidget(
+                focus_minutes=focus_minutes,
+                rest_minutes=rest_minutes,
+            ),
         ),
         PluginSpec(
-            PluginMetadata("device", "裝置監測", "Raspberry Pi 即時狀態", "0.4.0", 50),
+            PluginMetadata("device", "裝置監測", "Raspberry Pi 即時狀態", "0.5.0", 50),
             lambda _context: DeviceMonitorScreen(model_path, preview_path, low_power),
+            create_widget=lambda _context: DeviceHomeWidget(),
         ),
     )

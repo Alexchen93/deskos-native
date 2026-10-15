@@ -15,8 +15,10 @@ from gi.repository import GLib, Gtk
 
 from deskos.core.models import FeedItem, FocusState, TelemetrySnapshot, WeatherSnapshot
 from deskos.plugins.api import PluginEvent
+from deskos.services.history import HistorySample
 from deskos.settings import DeskOSSettings
 
+from .charts import Sparkline
 from .device import DeviceModelView
 from .formatters import duration, freshness_label, human_bytes, percent, temperature
 
@@ -104,168 +106,6 @@ def _weather_advice(snapshot: WeatherSnapshot) -> str:
     if snapshot.temperature_c <= 18:
         return "偏涼，出門多帶一件"
     return "適合安排戶外活動"
-
-
-class HomeScreen(Gtk.Box):
-    """Daily briefing with one primary observation and a compact action list."""
-
-    def __init__(self, on_navigate: Callable[[str], None]) -> None:
-        super().__init__(orientation=Gtk.Orientation.VERTICAL, spacing=14)
-        self.add_css_class("screen")
-        self._on_navigate = on_navigate
-        self._use_24_hour = True
-
-        header = Gtk.Box(spacing=16)
-        header.add_css_class("home-header")
-        greeting = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=2, hexpand=True)
-        self._greeting = _label("早安", "home-greeting", xalign=0)
-        greeting.append(self._greeting)
-        self._date = _label("", "screen-subtitle", xalign=0)
-        greeting.append(self._date)
-        header.append(greeting)
-        self._home_clock = _label("--:--", "header-clock", valign=Gtk.Align.CENTER)
-        header.append(self._home_clock)
-        self.append(header)
-
-        body = Gtk.Box(spacing=14, vexpand=True)
-        self._source_widgets: dict[str, Gtk.Widget] = {}
-        weather_button = Gtk.Button(width_request=318, hexpand=False, vexpand=True)
-        weather_button.add_css_class("briefing-weather")
-        weather_button.connect("clicked", lambda _button: self._on_navigate("weather"))
-        self._source_widgets["weather"] = weather_button
-        weather = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=8)
-        weather.append(_label("現在天氣", "section-label", xalign=0))
-        current = Gtk.Box(spacing=14, valign=Gtk.Align.CENTER, vexpand=True)
-        self._weather_icon = _label("○", "home-weather-icon")
-        current.append(self._weather_icon)
-        current_copy = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=0)
-        self._weather_temperature = _label("—", "home-temperature", xalign=0)
-        self._weather_location = _label("等待更新", "data-label", xalign=0)
-        current_copy.append(self._weather_temperature)
-        current_copy.append(self._weather_location)
-        current.append(current_copy)
-        weather.append(current)
-        self._weather_detail = _label("體感 —  ·  降雨 —", "meta-label", xalign=0)
-        weather.append(self._weather_detail)
-        weather_button.set_child(weather)
-        body.append(weather_button)
-
-        briefing = Gtk.Box(
-            orientation=Gtk.Orientation.VERTICAL,
-            spacing=0,
-            hexpand=True,
-            valign=Gtk.Align.START,
-        )
-        briefing.add_css_class("briefing-list")
-        briefing.append(_label("今日摘要", "section-label", xalign=0, margin_top=12))
-        self._focus_time, self._focus_detail, self._source_widgets["focus"] = self._briefing_row(
-            briefing,
-            "focus",
-            "專注計時",
-            "25:00",
-            "已暫停 · 今天完成 0 次",
-        )
-        self._system_value, self._system_detail, self._source_widgets["device"] = (
-            self._briefing_row(
-                briefing,
-                "device",
-                "裝置狀態",
-                "CPU —  ·  溫度 —",
-                "記憶體 —",
-            )
-        )
-        self._feed_title, self._feed_source, self._source_widgets["feed"] = self._briefing_row(
-            briefing,
-            "feed",
-            "最新科技快訊",
-            "等待新聞更新",
-            "稍後自動更新",
-            wrap=True,
-        )
-        body.append(briefing)
-        self.append(body)
-
-        self.update_time(datetime.now())
-        GLib.timeout_add_seconds(30, self._tick)
-
-    def _briefing_row(
-        self,
-        parent: Gtk.Box,
-        page: str,
-        title: str,
-        value: str,
-        detail: str,
-        *,
-        wrap: bool = False,
-    ) -> tuple[Gtk.Label, Gtk.Label, Gtk.Button]:
-        button = Gtk.Button(hexpand=True)
-        button.add_css_class("briefing-row")
-        button.connect("clicked", lambda _button: self._on_navigate(page))
-        row = Gtk.Box(spacing=12)
-        copy = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=2, hexpand=True)
-        copy.append(_label(title, "briefing-title", xalign=0))
-        value_label = _label(value, "briefing-value", xalign=0, wrap=wrap, lines=2)
-        copy.append(value_label)
-        detail_label = _label(detail, "briefing-detail", xalign=0)
-        copy.append(detail_label)
-        row.append(copy)
-        row.append(_label("›", "briefing-arrow", valign=Gtk.Align.CENTER))
-        button.set_child(row)
-        parent.append(button)
-        return value_label, detail_label, button
-
-    def set_plugin_available(self, plugin_id: str, available: bool) -> None:
-        widget = self._source_widgets.get(plugin_id)
-        if widget is not None:
-            widget.set_visible(available)
-
-    def _tick(self) -> bool:
-        self.update_time(datetime.now())
-        return True
-
-    def update_time(self, moment: datetime) -> None:
-        hour = moment.hour
-        greeting = "早安" if hour < 12 else "午安" if hour < 18 else "晚安"
-        self._greeting.set_label(greeting)
-        self._date.set_label(f"{moment:%Y 年 %m 月 %d 日}  {WEEKDAYS[moment.weekday()]}")
-        self._home_clock.set_label(moment.strftime("%H:%M" if self._use_24_hour else "%I:%M %p"))
-
-    def update_settings(self, settings: DeskOSSettings) -> None:
-        self._use_24_hour = settings.use_24_hour_time
-        self.update_time(datetime.now())
-
-    def update_weather(self, snapshot: WeatherSnapshot) -> None:
-        icon, condition = _weather_presentation(snapshot.weather_code)
-        self._weather_icon.set_label(icon)
-        self._weather_location.set_label(f"{snapshot.location} · {condition}")
-        self._weather_temperature.set_label(temperature(snapshot.temperature_c))
-        self._weather_detail.set_label(
-            f"體感 {temperature(snapshot.apparent_temperature_c)}  ·  "
-            f"降雨 {percent(snapshot.precipitation_probability)}"
-        )
-
-    def update_focus(self, state: FocusState) -> None:
-        mode = "專注" if state.mode == "focus" else "休息"
-        status = "進行中" if state.running else "已暫停"
-        self._focus_time.set_label(duration(state.remaining_seconds))
-        self._focus_detail.set_label(f"{mode} · {status} · 完成 {state.completed_sessions} 次")
-
-    def update_telemetry(self, snapshot: TelemetrySnapshot) -> None:
-        self._system_value.set_label(
-            f"CPU {percent(snapshot.cpu_percent)}  ·  溫度 {temperature(snapshot.cpu_temp_c)}"
-        )
-        hostname = snapshot.hostname or "本機"
-        self._system_detail.set_label(f"{hostname} · 記憶體 {percent(snapshot.memory_percent)}")
-
-    def update_feed(self, items: Sequence[FeedItem]) -> None:
-        if not items:
-            self._feed_title.set_label("目前沒有科技快訊")
-            self._feed_source.set_label("稍後再回來看看")
-            return
-        item = items[0]
-        self._feed_title.set_label(item.title)
-        published = item.published_at.strftime("%H:%M") if item.published_at else "最新"
-        self._feed_source.set_label(f"{item.source} · {published}")
 
 
 class ClockScreen(Gtk.Box):
@@ -366,6 +206,9 @@ class WeatherScreen(Gtk.Box):
         observation.append(current)
         self._advice = _label("資料更新後提供建議", "weather-advice", xalign=0)
         observation.append(self._advice)
+        observation.append(_label("溫度趨勢", "meta-label", xalign=0))
+        self._temperature_trend = Sparkline(height=42)
+        observation.append(self._temperature_trend)
         content.append(observation)
 
         facts = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=0, vexpand=True)
@@ -392,6 +235,8 @@ class WeatherScreen(Gtk.Box):
     def on_plugin_event(self, event: PluginEvent) -> None:
         if event.topic == "weather" and isinstance(event.payload, WeatherSnapshot):
             self.update_weather(event.payload)
+        elif event.topic == "weather_history" and isinstance(event.payload, Sequence):
+            self._temperature_trend.set_samples(_history_samples(event.payload))
 
 
 class TechFeedScreen(Gtk.Box):
@@ -566,6 +411,12 @@ class DeviceMonitorScreen(Gtk.Box):
                 name,
                 value_class="telemetry-value",
             )
+        telemetry.append(_label("CPU 溫度趨勢", "meta-label", xalign=0, margin_top=8))
+        self._temperature_trend = Sparkline(height=34)
+        telemetry.append(self._temperature_trend)
+        telemetry.append(_label("CPU 使用率趨勢", "meta-label", xalign=0, margin_top=6))
+        self._usage_trend = Sparkline(height=34)
+        telemetry.append(self._usage_trend)
         content.append(telemetry)
         self.append(content)
 
@@ -592,6 +443,10 @@ class DeviceMonitorScreen(Gtk.Box):
     def on_plugin_event(self, event: PluginEvent) -> None:
         if event.topic == "telemetry" and isinstance(event.payload, TelemetrySnapshot):
             self.update_telemetry(event.payload)
+        elif event.topic == "cpu_temperature_history" and isinstance(event.payload, Sequence):
+            self._temperature_trend.set_samples(_history_samples(event.payload))
+        elif event.topic == "cpu_usage_history" and isinstance(event.payload, Sequence):
+            self._usage_trend.set_samples(_history_samples(event.payload))
 
     def set_visible(self, visible: bool) -> None:
         """Retain the original render-toggle API used by the first window shell."""
@@ -744,3 +599,7 @@ class SettingsScreen(Gtk.Box):
             self._status.set_label(str(error))
             return
         self._status.set_label("已儲存")
+
+
+def _history_samples(values: Sequence[object]) -> tuple[HistorySample, ...]:
+    return tuple(value for value in values if isinstance(value, HistorySample))

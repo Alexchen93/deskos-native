@@ -18,6 +18,7 @@ from deskos.plugins.builtin import builtin_plugin_specs
 from deskos.services import (
     FeedSource,
     FocusTimer,
+    MetricHistory,
     OpenMeteoWeatherService,
     PsutilTelemetryCollector,
     RssAtomFeedService,
@@ -44,6 +45,7 @@ class DeskOSApplication(Gtk.Application):
         self.settings_repository = SettingsRepository(self.repository)
         self.settings = self.settings_repository.load()
         self.telemetry = PsutilTelemetryCollector()
+        self.history = MetricHistory(self.repository)
         self.focus = FocusTimer(self.repository, duration_seconds=self.settings.focus_minutes * 60)
         self.weather: OpenMeteoWeatherService
         self.feeds: RssAtomFeedService
@@ -123,7 +125,9 @@ class DeskOSApplication(Gtk.Application):
         self._dispatch("focus", self.focus.state())
         cached_weather = self.weather.latest()
         if cached_weather is not None:
+            self.history.record_weather(cached_weather)
             self._dispatch("weather", cached_weather)
+        self._dispatch_history()
         cached_feed = self.feeds.latest()
         if cached_feed:
             self._dispatch("feed", tuple(cached_feed))
@@ -148,8 +152,16 @@ class DeskOSApplication(Gtk.Application):
         GLib.idle_add(self._apply_telemetry, snapshot)
 
     def _apply_telemetry(self, snapshot: TelemetrySnapshot) -> bool:
+        sampled = self.history.record_telemetry(snapshot)
         self._dispatch("telemetry", snapshot)
+        if sampled:
+            self._dispatch_history()
         return False
+
+    def _dispatch_history(self) -> None:
+        self._dispatch("weather_history", self.history.weather_temperatures())
+        self._dispatch("cpu_temperature_history", self.history.cpu_temperatures())
+        self._dispatch("cpu_usage_history", self.history.cpu_usage())
 
     def _refresh_weather(self) -> bool:
         revision = self._service_revision
@@ -161,7 +173,10 @@ class DeskOSApplication(Gtk.Application):
 
     def _apply_weather(self, snapshot: WeatherSnapshot, revision: int) -> bool:
         if revision == self._service_revision:
+            sampled = self.history.record_weather(snapshot)
             self._dispatch("weather", snapshot)
+            if sampled:
+                self._dispatch_history()
         return False
 
     def _refresh_feed(self) -> bool:

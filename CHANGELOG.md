@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.5.0 — 2026-10-14
+
+- Replaced the persistent navigation rail with a full-width, warm-light Widget Home designed for a 1024×600 touch display.
+- Added an edge-triggered, overlay App Rail from either side of the screen; it scrolls vertically and never consumes Home content width.
+- Added an explicit **Edit Home** button plus durable Widget ordering, standard/wide sizing, hiding, and restoring. Focus is hidden on a fresh Home layout but remains available to add back.
+- Added a plugin Widget factory capability. Clock, Weather, Tech Feed, Focus, and Device Monitor now provide compact native Home previews that receive the same live events as their full-screen apps.
+- Added local, downsampled SQLite histories and native Cairo sparklines: weather temperature samples every 20 minutes; CPU temperature and usage samples every minute. The charts appear on Home and their related full-screen pages.
+- Reworked the visual language into task-specific light scenes for clock, weather, news, focus, and device monitoring.
+- Expanded the test suite to 59 tests; Ruff, compileall, and live 1024×600 Raspberry Pi validation passed.
+
 ## 0.4.0 — 2026-10-13
 
 - Rebuilt DeskOS around a native mini-app plugin platform.

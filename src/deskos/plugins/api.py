@@ -52,6 +52,7 @@ class PluginContext:
 
 
 ScreenFactory = Callable[[PluginContext], object]
+WidgetFactory = Callable[[PluginContext], object]
 LifecycleHook = Callable[[PluginContext], None]
 
 
@@ -61,3 +62,4 @@ class PluginSpec:
     create_screen: ScreenFactory
     on_install: LifecycleHook | None = None
     on_remove: LifecycleHook | None = None
+    create_widget: WidgetFactory | None = None
